@@ -41,15 +41,15 @@ print("Use device: %s" % device)
  
 # Please tune the hyperparameters
 parser = argparse.ArgumentParser()
-parser.add_argument("--train_ep", default=2000, type=int)
+parser.add_argument("--train_ep", default=1000, type=int)
 parser.add_argument("--mem_capacity", default=60000, type=int)  # In paper, size is 1000000
 parser.add_argument("--batch_size", default=128, type=int)  # 16 32 64 128
-parser.add_argument("--lr", default=0.0006, type=float)  # ~0.0001 ~0.001
+parser.add_argument("--lr", default=0.0003, type=float)  # ~0.0001 ~0.001
 parser.add_argument("--gamma", default=0.999, type=float)  # 0.8 0.9 0.99 0.999
 parser.add_argument("--epsilon_start", default=1.0, type=float)
 parser.add_argument("--epsilon_final", default=0.05, type=float)  # Try 0.05?
 parser.add_argument("--epsilon_decay", default=500000, type=float)  # 500000 1000000 4000000
-parser.add_argument("--target_step", default=10000, type=int)  # ?
+parser.add_argument("--target_step", default=100, type=int)  # ?
 parser.add_argument("--eval_per_ep", default=10, type=int)
 parser.add_argument("--save_per_ep", default=50, type=int)
 parser.add_argument("--save_dir", default="model")
@@ -127,7 +127,7 @@ class DQN(object):
         self.target_net = CNN(84, 84, self.action_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.LEARN_RATE)
+        self.optimizer = optim.RMSprop(self.policy_net.parameters(), lr=self.LEARN_RATE)
  
         self.memory = ReplayMemory(args.mem_capacity)
         self.interaction_steps = 0
@@ -139,9 +139,9 @@ class DQN(object):
         if random.random() < self.epsilon:
             # random select for epsilon greedy (Dependent on the exploration probability)
             t = random.random()
-            if t < 0.6:
+            if t < 0.9:
                 return torch.tensor([[1]],device=device,dtype=torch.long)
-            elif t < 0.9:
+            elif t < 0.98:
                 return torch.tensor([[0]],device=device,dtype=torch.long)
             else:
                 return torch.tensor([[2]], device=device, dtype=torch.long)
@@ -212,19 +212,20 @@ class DQN(object):
         self.optimizer.zero_grad()
 
         for i, state in enumerate(state_batch):     # i starts at 0
-            q_state = self.policy_net(state.unsqueeze(0)).squeeze()[action_batch[i]]
+            q_state = self.policy_net(state.unsqueeze(0)).squeeze()[action_batch[i].item()]
             if final_mask[i] == False:
-                q_next_state, _ = self.target_net(non_final_next_states[tmp].unsqueeze(0)).max(1)
+                _, next_state_action = self.policy_net(non_final_next_states[tmp].unsqueeze(0)).max(1)
+                q_next_state = self.target_net(non_final_next_states[tmp].unsqueeze(0)).squeeze()[next_state_action.item()]
                 q_expected = reward_batch[i] + self.GAMMA * q_next_state
                 tmp += 1
             else:
                 q_expected = reward_batch[i]
-            loss += (q_state - q_expected)**2
+            loss += torch.nn.functional.mse_loss(q_state,q_expected)
 
             # print(i)
         # please check these pytorch and do regression problem
         
-        loss = (loss/self.BATCH_SIZE)**0.5
+        
         loss.backward()
         for param in self.policy_net.parameters():
             param.grad.data.clamp_(-1, 1)     # clipping gradient to -1~1
@@ -335,7 +336,7 @@ def main():
             episode_reward += reward
             global_steps += 1
  
-            if global_steps > 50000 and global_steps % 100 == 0:
+            if global_steps > 50000 and global_steps % 20 == 0:
                 agent.update()
  
             if done:
